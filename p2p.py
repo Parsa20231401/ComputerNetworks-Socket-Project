@@ -13,6 +13,9 @@ PEERS_FILE = "config.json"
 online_peers = set()
 lock = threading.Lock()
 
+current_chat_peer = None  # آدرس IP کاربری که با او در حال چت هستیم
+incoming_messages = {}    # پیام‌های دریافتی برای کاربران دیگر
+
 def load_peers():
     if os.path.exists(PEERS_FILE):
         with open(PEERS_FILE, 'r') as f:
@@ -74,7 +77,7 @@ def handle_client(conn, addr):
             real_checksum = calculate_checksum(decrypted)
 
             if recv_checksum != real_checksum:
-                print("⚠️ پیام آسیب دیده (checksum mismatch)")
+                print("⚠️(checksum mismatch)")
                 continue
 
             if msg_type == "TEXT":
@@ -85,10 +88,10 @@ def handle_client(conn, addr):
                 path = os.path.join("media", filename)
                 with open(path, 'wb') as f:
                     f.write(decrypted)
-                print(f"\n📁 فایل {filename} از {addr[0]} دریافت شد و در پوشه media ذخیره شد.")
+                print(f"\n📁 file {filename} from {addr[0]} has recived and saved to media folder")
 
         except Exception as e:
-            print(f"خطا در دریافت: {e}")
+            print(f" recive failure {e}")
             break
 
             
@@ -141,36 +144,36 @@ def choose_peer():
     lock.release()
 
     if not peers:
-        print("❌ هیچ کاربر آنلاینی برای چت وجود ندارد.")
+        print("❌ there is no online user to chat")
         return None
 
-    print("👥 کاربران آنلاین:")
+    print("👥 online users: ")
     for i, peer in enumerate(peers):
         print(f"[{i}] {peer}")
 
-    choice = input("شماره کاربر برای چت را وارد کنید: ")
+    choice = input("enter the number of user to chat:")
     try:
         idx = int(choice)
         return peers[idx]
     except:
-        print("❌ انتخاب نامعتبر.")
+        print("❌ invalid choose ")
         return None
 
 def chat_with(peer_ip):
     conn = connect_to_peer(peer_ip)
     if not conn:
-        print("❌ اتصال برقرار نشد.")
+        print("❌ connection failed ")
         return
 
-    print(f"💬 چت با {peer_ip}. برای ارسال فایل: /sendfile filepath")
+    print(f"💬 chat with {peer_ip}.for sending file: /sendfile filepath")
     while True:
-        msg = input("📤 your message ")
+        msg = input("📤 your message: ")
         if msg == "/exit":
             break
         elif msg.startswith("/sendfile "):
             filepath = msg.split(" ", 1)[1]
             if not os.path.exists(filepath):
-                print("❌ فایل یافت نشد.")
+                print("❌ the file didnt find")
                 continue
             with open(filepath, 'rb') as f:
                 content = f.read()
@@ -211,14 +214,14 @@ def main():
     name = input("Enter your name: ")
 
     while True:
-        print("\n📝 دستورات:")
+        print("\n📝 instructions:")
         print("  /online")
         print("  /chat")
         print("  /exit")
         cmd = input(">> ")
 
         if cmd == "/online":
-            print("🟢 کاربران آنلاین:")
+            print("🟢 online users")
             for peer in online_peers:
                 print(f" - {peer}")
         elif cmd == "/chat":

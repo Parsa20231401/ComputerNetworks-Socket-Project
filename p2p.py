@@ -34,6 +34,7 @@ def show_history():
     else:
         print("No chat history yet.")
 
+
 def handle_client(conn, addr):
     with conn:
         lock.acquire()
@@ -42,57 +43,49 @@ def handle_client(conn, addr):
 
         while True:
             try:
-                data = conn.recv(1024)
+                data = conn.recv(4096)
                 if not data:
                     break
-                msg = data.decode()
-                print(f"\n{addr[0]} says: {msg}")
-                save_message(f"{addr[0]}: {msg}")
-            except:
+
+                parts = data.split(b':', 3)
+                if len(parts) < 4:
+                    continue
+
+                msg_type = parts[0].decode()
+                filename = parts[1].decode()
+                recv_checksum = parts[2].decode()
+                payload = parts[3]
+
+                decrypted = onion_decrypt(payload)
+                real_checksum = calculate_checksum(decrypted)
+
+                if recv_checksum != real_checksum:
+                    print("⚠️ پیام آسیب دیده (checksum mismatch)")
+                    continue
+
+                if msg_type == "TEXT":
+                    message = decrypted.decode()
+                    if addr[0] == current_chat_peer:
+                        print(f"\n💬 {addr[0]} says: {message}")
+                        save_message(f"{addr[0]}: {message}")
+                    else:
+                        # ذخیره پیام برای بعد
+                        incoming_messages.setdefault(addr[0], []).append(message)
+                        print(f"\n🔔 اعلان: پیام جدید از {addr[0]}")
+                elif msg_type == "FILE":
+                    os.makedirs("media", exist_ok=True)
+                    path = os.path.join("media", filename)
+                    with open(path, 'wb') as f:
+                        f.write(decrypted)
+                    print(f"\n📁 فایل {filename} از {addr[0]} دریافت شد.")
+
+            except Exception as e:
+                print(f"خطا در دریافت: {e}")
                 break
+
         lock.acquire()
         online_peers.discard(addr[0])
         lock.release()
-        
-        
-        
-
-
-    while True:
-        try:
-            data = conn.recv(4096)
-            if not data:
-                break
-
-            parts = data.split(b':', 3)
-            if len(parts) < 4:
-                continue
-
-            msg_type = parts[0].decode()
-            filename = parts[1].decode()
-            recv_checksum = parts[2].decode()
-            payload = parts[3]
-
-            decrypted = onion_decrypt(payload)
-            real_checksum = calculate_checksum(decrypted)
-
-            if recv_checksum != real_checksum:
-                print("⚠️(checksum mismatch)")
-                continue
-
-            if msg_type == "TEXT":
-                print(f"\n{addr[0]} says: {decrypted.decode()}")
-                save_message(f"{addr[0]}: {decrypted.decode()}")
-            elif msg_type == "FILE":
-                os.makedirs("media", exist_ok=True)
-                path = os.path.join("media", filename)
-                with open(path, 'wb') as f:
-                    f.write(decrypted)
-                print(f"\n📁 file {filename} from {addr[0]} has recived and saved to media folder")
-
-        except Exception as e:
-            print(f" recive failure {e}")
-            break
 
             
         
@@ -159,26 +152,36 @@ def choose_peer():
         print("❌ invalid choose ")
         return None
 
+
 def chat_with(peer_ip):
+    global current_chat_peer
+    current_chat_peer = peer_ip
     conn = connect_to_peer(peer_ip)
     if not conn:
-        print("❌ connection failed ")
+        print("❌ اتصال برقرار نشد.")
         return
 
-    print(f"💬 chat with {peer_ip}.for sending file: /sendfile filepath")
+    print(f"💬 چت با {peer_ip}. برای ارسال فایل: /sendfile filepath")
+    
+    # نمایش پیام‌های ذخیره‌شده
+    if peer_ip in incoming_messages:
+        print("📥 پیام‌های قبلی:")
+        for msg in incoming_messages[peer_ip]:
+            print(f"{peer_ip}: {msg}")
+        del incoming_messages[peer_ip]
+
     while True:
-        msg = input("📤 your message: ")
+        msg = input("📤 پیام شما: ")
         if msg == "/exit":
             break
         elif msg.startswith("/sendfile "):
             filepath = msg.split(" ", 1)[1]
             if not os.path.exists(filepath):
-                print("❌ the file didnt find")
+                print("❌ فایل یافت نشد.")
                 continue
             with open(filepath, 'rb') as f:
                 content = f.read()
 
-            # اضافه کردن چک‌سام و رمزنگاری
             checksum = calculate_checksum(content)
             encrypted = onion_encrypt(content)
             header = f"FILE:{os.path.basename(filepath)}:{checksum}:".encode()
@@ -190,8 +193,8 @@ def chat_with(peer_ip):
             header = f"TEXT::{checksum}:".encode()
             conn.send(header + encrypted)
 
+    current_chat_peer = None
     conn.close()
-
 
 
 

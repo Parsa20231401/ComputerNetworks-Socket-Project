@@ -124,23 +124,51 @@ def broadcast_peers():
         pass
 
 
+
+
 class MessengerGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("P2P Messenger - PyQt5")
-        self.resize(600, 500)
+        self.resize(700, 550)
+        self.setStyleSheet("background-color: #f0f0f0;")
         self.current_peer = None
         self.init_login_ui()
+
+    def styled_button(self, text):
+        btn = QPushButton(text)
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0078D7;
+                color: white;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #005A9E;
+            }
+        """)
+        return btn
 
     def init_login_ui(self):
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
 
+        title = QLabel("Welcome to P2P Messenger")
+        title.setFont(QFont("Segoe UI", 18))
+        title.setAlignment(Qt.AlignCenter)
+        self.layout.addWidget(title)
+
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Enter your username")
+        self.username_input.setStyleSheet("padding: 6px; border-radius: 4px;")
+
         self.port_input = QLineEdit()
         self.port_input.setPlaceholderText("Enter your port")
-        self.start_button = QPushButton("Start")
+        self.port_input.setStyleSheet("padding: 6px; border-radius: 4px;")
+
+        self.start_button = self.styled_button("Start")
         self.start_button.clicked.connect(self.start_app)
 
         self.layout.addWidget(QLabel("Username:"))
@@ -148,6 +176,40 @@ class MessengerGUI(QWidget):
         self.layout.addWidget(QLabel("Port:"))
         self.layout.addWidget(self.port_input)
         self.layout.addWidget(self.start_button)
+
+    def init_main_ui(self):
+        for i in reversed(range(self.layout.count())):
+            self.layout.itemAt(i).widget().setParent(None)
+
+        header = QLabel(f"Logged in as {USERNAME}")
+        header.setFont(QFont("Segoe UI", 12))
+        header.setAlignment(Qt.AlignCenter)
+
+        self.notification_label = QLabel("")
+        self.notification_label.setStyleSheet("color: red; font-weight: bold;")
+        self.user_list = QListWidget()
+        self.user_list.setStyleSheet("background: white; border-radius: 4px;")
+
+        self.refresh_btn = self.styled_button("Refresh Online Users")
+        self.chat_btn = self.styled_button("Start Chat")
+        self.history_btn = self.styled_button("View Chat History")
+
+        self.refresh_btn.clicked.connect(self.refresh_users)
+        self.chat_btn.clicked.connect(self.open_chat_window)
+        self.history_btn.clicked.connect(self.show_history)
+
+        self.layout.addWidget(header)
+        self.layout.addSpacing(10)
+        self.layout.addWidget(self.notification_label)
+        self.layout.addWidget(self.user_list)
+        self.layout.addSpacing(10)
+        self.layout.addWidget(self.refresh_btn)
+        self.layout.addWidget(self.chat_btn)
+        self.layout.addWidget(self.history_btn)
+
+        self.notification_timer = QTimer()
+        self.notification_timer.timeout.connect(self.check_notifications)
+        self.notification_timer.start(1000)
 
     def start_app(self):
         global PORT, USERNAME
@@ -161,32 +223,6 @@ class MessengerGUI(QWidget):
         threading.Thread(target=server_thread, daemon=True).start()
         broadcast_peers()
         self.init_main_ui()
-
-    def init_main_ui(self):
-        for i in reversed(range(self.layout.count())):
-            self.layout.itemAt(i).widget().setParent(None)
-
-        self.label = QLabel(f"Welcome {USERNAME}")
-        self.notification_label = QLabel("")
-        self.user_list = QListWidget()
-        self.refresh_btn = QPushButton("Refresh")
-        self.chat_btn = QPushButton("Chat")
-        self.history_btn = QPushButton("Show History")
-
-        self.refresh_btn.clicked.connect(self.refresh_users)
-        self.chat_btn.clicked.connect(self.open_chat_window)
-        self.history_btn.clicked.connect(self.show_history)
-
-        self.layout.addWidget(self.label)
-        self.layout.addWidget(self.notification_label)
-        self.layout.addWidget(self.user_list)
-        self.layout.addWidget(self.refresh_btn)
-        self.layout.addWidget(self.chat_btn)
-        self.layout.addWidget(self.history_btn)
-
-        self.notification_timer = QTimer()
-        self.notification_timer.timeout.connect(self.check_notifications)
-        self.notification_timer.start(1000)
 
     def refresh_users(self):
         self.user_list.clear()
@@ -236,12 +272,18 @@ class ChatWindow(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        self.setStyleSheet("background-color: #fafafa;")
         self.layout = QVBoxLayout()
         self.chat_area = QTextEdit()
         self.chat_area.setReadOnly(True)
+        self.chat_area.setStyleSheet("background-color: white; padding: 6px; border-radius: 4px;")
+
         self.msg_input = QLineEdit()
-        self.send_btn = QPushButton("Send")
-        self.file_btn = QPushButton("Send File")
+        self.msg_input.setPlaceholderText("Type your message here...")
+        self.msg_input.setStyleSheet("padding: 6px; border-radius: 4px;")
+
+        self.send_btn = self.parent.styled_button("Send")
+        self.file_btn = self.parent.styled_button("Send File")
 
         self.send_btn.clicked.connect(self.send_msg)
         self.file_btn.clicked.connect(self.send_file)

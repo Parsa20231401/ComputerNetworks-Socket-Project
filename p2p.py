@@ -8,7 +8,11 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QTextEdit,
     QLineEdit, QFileDialog, QListWidget, QMessageBox, QHBoxLayout
 )
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QFont, QPalette, QColor
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
+from PyQt5.QtCore import QUrl
 from utils import onion_encrypt, onion_decrypt, calculate_checksum
 
 connections = {}
@@ -266,12 +270,34 @@ class ChatWindow(QWidget):
                         self.chat_area.append(f"{self.peer_ip}: <img src='{img_path}' width='200'>")
                     else:
                         self.chat_area.append(f"{self.peer_ip}: [Image file missing: {filename}]")
-                elif msg.startswith("[Received file: ") and any(msg.endswith(ext + "]") for ext in [".mp4", ".avi", ".mov"]):
+                elif msg.startswith("[Received file: ") and any(msg.endswith(ext + "]") for ext in [".mp4", ".MP4",".avi", ".mov"]):
                     filename = msg.split("[Received file: ")[1][:-1]
-                    self.chat_area.append(f"{self.peer_ip}: [Video received: {filename}] (open from media folder)")
+                    video_path = os.path.join("media", filename)
+                    if os.path.exists(video_path):
+                        self.chat_area.append(f"{self.peer_ip}: [Playing video: {filename}]")
+                        self.play_video(video_path)
+                    else:
+                        self.chat_area.append(f"{self.peer_ip}: [Video file missing: {filename}]")
                 else:
                     self.chat_area.append(f"{self.peer_ip}: {msg}")
             incoming_messages[self.peer_ip] = []
+
+    def play_video(self, path):
+        self.video_window = QWidget()
+        self.video_window.setWindowTitle("Video Player")
+        self.video_window.resize(640, 480)
+        layout = QVBoxLayout()
+        self.video_widget = QVideoWidget()
+        layout.addWidget(self.video_widget)
+        self.video_window.setLayout(layout)
+
+        self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setMedia(QMediaContent(QUrl.fromLocalFile(os.path.abspath(path))))
+        self.media_player.play()
+
+        self.video_window.show()
+
 
 
     def send_msg(self):

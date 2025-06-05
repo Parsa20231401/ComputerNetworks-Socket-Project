@@ -2,7 +2,8 @@ import tkinter as tk
 from tkinter import simpledialog, scrolledtext, messagebox
 import threading
 import json
-from p2p import chat_with, main, online_peers
+import socket
+from p2p import chat_with, main, online_peers, connections, handle_client, lock
 
 class ChatGUI:
     def __init__(self, root):
@@ -52,9 +53,35 @@ class ChatGUI:
 
     def refresh_peers(self):
         self.peer_listbox.delete(0, tk.END)
-        for peer in online_peers:
-            # if peer != "127.0.0.1":
-            self.peer_listbox.insert(tk.END, peer)
+
+        try:
+            with open("config.json") as f:
+                config = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read config: {e}")
+            return
+
+        for peer in config["peers"]:
+            ip = peer["ip"]
+            port = peer["port"]
+            if ip == "127.0.0.1":  # skip self
+                continue
+
+            # Try to connect if not already
+            if ip not in connections:
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.connect((ip, port))
+                    connections[ip] = s
+                    with lock:
+                        online_peers.add(ip)
+                    threading.Thread(target=handle_client, args=(s, ip), daemon=True).start()
+                except Exception as e:
+                    continue  # can't connect = offline
+
+        # Display online users
+        for ip in sorted(online_peers):
+            self.peer_listbox.insert(tk.END, ip)
 
     def open_chat(self):
         selection = self.peer_listbox.curselection()

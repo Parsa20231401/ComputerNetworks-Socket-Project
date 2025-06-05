@@ -1,24 +1,27 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+import sys
 import socket
 import threading
-import json
 import os
+import json
 from datetime import datetime
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QTextEdit,
+    QLineEdit, QFileDialog, QListWidget, QMessageBox, QHBoxLayout
+)
+from PyQt5.QtCore import QTimer
 from utils import onion_encrypt, onion_decrypt, calculate_checksum
 
 connections = {}
+online_peers = set()
+incoming_messages = {}  # ip -> list of messages
+current_chat_peer = None
 PORT = 0
+USERNAME = ""
 HISTORY_FILE = "history.txt"
 PEERS_FILE = "config.json"
-online_peers = set()
 lock = threading.Lock()
 
-current_chat_peer = None
-incoming_messages = {}  # ip -> list of messages
-USERNAME = ""
 
-# === Backend functions from CLI logic reused ===
 def save_message(msg):
     with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
         f.write(f"{datetime.now()} - {msg}\n")
@@ -45,6 +48,7 @@ def handle_client(conn, addr):
                 parts = data.split(b':', 3)
                 if len(parts) < 4:
                     continue
+
                 msg_type = parts[0].decode()
                 filename = parts[1].decode()
                 recv_checksum = parts[2].decode()
@@ -67,7 +71,7 @@ def handle_client(conn, addr):
                         f.write(decrypted)
                     incoming_messages.setdefault(ip, []).append(f"[Received file: {filename}]")
 
-            except Exception:
+            except:
                 break
 
     with lock:
@@ -96,194 +100,206 @@ def connect_to_peer(ip, port):
         with lock:
             connections[ip] = s
             online_peers.add(ip)
-        threading.Thread(target=listen_to_peer, args=(s, ip), daemon=True).start()
+        threading.Thread(target=handle_client, args=(s, (ip, port)), daemon=True).start()
         return s
     except:
         return None
 
-def listen_to_peer(sock, ip):
-    try:
-        while True:
-            data = sock.recv(4096)
-            if not data:
-                break
-            parts = data.split(b':', 3)
-            if len(parts) < 4:
-                continue
-            msg_type = parts[0].decode()
-            filename = parts[1].decode()
-            recv_checksum = parts[2].decode()
-            payload = parts[3]
-
-            decrypted = onion_decrypt(payload)
-            real_checksum = calculate_checksum(decrypted)
-            if recv_checksum != real_checksum:
-                continue
-            if msg_type == "TEXT":
-                message = decrypted.decode('utf-8')
-                save_message(f"{ip}: {message}")
-                incoming_messages.setdefault(ip, []).append(message)
-            elif msg_type == "FILE":
-                os.makedirs("media", exist_ok=True)
-                path = os.path.join("media", filename)
-                with open(path, 'wb') as f:
-                    f.write(decrypted)
-                incoming_messages.setdefault(ip, []).append(f"[Received file: {filename}]")
-    except:
-        pass
-    finally:
-        with lock:
-            connections.pop(ip, None)
-            online_peers.discard(ip)
-
 def broadcast_peers():
-    with open(PEERS_FILE) as f:
-        peer_config = json.load(f)
-        for peer in peer_config["peers"]:
+    try:
+        with open(PEERS_FILE) as f:
+            config = json.load(f)
+        for peer in config["peers"]:
             ip, port = peer["ip"], peer["port"]
             if port != PORT:
                 connect_to_peer(ip, port)
+    except:
+        pass
 
-# === GUI ===
-class ChatApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("P2P Messenger")
+
+class MessengerGUI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("P2P Messenger - PyQt5")
+        self.resize(600, 500)
         self.current_peer = None
-        self.setup_login()
+        self.init_login_ui()
 
-    def setup_login(self):
-        self.clear()
-        tk.Label(self.root, text="Username:").pack()
-        self.user_entry = tk.Entry(self.root)
-        self.user_entry.pack()
-        tk.Label(self.root, text="Port:").pack()
-        self.port_entry = tk.Entry(self.root)
-        self.port_entry.pack()
-        tk.Button(self.root, text="Start", command=self.start_chat).pack(pady=10)
+    def init_login_ui(self):
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
 
-    def start_chat(self):
+        self.username_input = QLineEdit()
+        self.username_input.setPlaceholderText("Enter your username")
+        self.port_input = QLineEdit()
+        self.port_input.setPlaceholderText("Enter your port")
+        self.start_button = QPushButton("Start")
+        self.start_button.clicked.connect(self.start_app)
+
+        self.layout.addWidget(QLabel("Username:"))
+        self.layout.addWidget(self.username_input)
+        self.layout.addWidget(QLabel("Port:"))
+        self.layout.addWidget(self.port_input)
+        self.layout.addWidget(self.start_button)
+
+    def start_app(self):
         global PORT, USERNAME
         try:
-            USERNAME = self.user_entry.get()
-            PORT = int(self.port_entry.get())
+            USERNAME = self.username_input.text()
+            PORT = int(self.port_input.text())
         except:
-            messagebox.showerror("Error", "Invalid input")
+            QMessageBox.critical(self, "Error", "Invalid input")
             return
+
         threading.Thread(target=server_thread, daemon=True).start()
         broadcast_peers()
-        self.main_ui()
+        self.init_main_ui()
 
-    def main_ui(self):
-        self.clear()
-        self.notification_label = tk.Label(self.root, text="", fg="red")
-        self.notification_label.pack()
-        tk.Label(self.root, text=f"Welcome {USERNAME}", font=("Arial", 14)).pack(pady=5)
-        self.peer_list = tk.Listbox(self.root, width=50)
-        self.peer_list.pack(pady=5)
-        tk.Button(self.root, text="Refresh", command=self.refresh_peers).pack()
-        tk.Button(self.root, text="Chat", command=self.open_chat).pack(pady=5)
-        tk.Button(self.root, text="History", command=self.show_history).pack()
-        self.poll_incoming()
+    def init_main_ui(self):
+        for i in reversed(range(self.layout.count())):
+            self.layout.itemAt(i).widget().setParent(None)
 
-    def refresh_peers(self):
-        self.peer_list.delete(0, tk.END)
+        self.label = QLabel(f"Welcome {USERNAME}")
+        self.notification_label = QLabel("")
+        self.user_list = QListWidget()
+        self.refresh_btn = QPushButton("Refresh")
+        self.chat_btn = QPushButton("Chat")
+        self.history_btn = QPushButton("Show History")
+
+        self.refresh_btn.clicked.connect(self.refresh_users)
+        self.chat_btn.clicked.connect(self.open_chat_window)
+        self.history_btn.clicked.connect(self.show_history)
+
+        self.layout.addWidget(self.label)
+        self.layout.addWidget(self.notification_label)
+        self.layout.addWidget(self.user_list)
+        self.layout.addWidget(self.refresh_btn)
+        self.layout.addWidget(self.chat_btn)
+        self.layout.addWidget(self.history_btn)
+
+        self.notification_timer = QTimer()
+        self.notification_timer.timeout.connect(self.check_notifications)
+        self.notification_timer.start(1000)
+
+    def refresh_users(self):
+        self.user_list.clear()
+        # try:
+        #     with open(PEERS_FILE) as f:
+        #         config = json.load(f)
+        #     for peer in config["peers"]:
+        #         ip, port = peer["ip"], peer["port"]
+        #         if port == PORT:
+        #             continue
+        #         connect_to_peer(ip, port)
+        # except Exception as e:
+        #     QMessageBox.critical(self, "Error", f"Failed to read config: {e}")
+
         with lock:
-            for ip in online_peers:
-                self.peer_list.insert(tk.END, ip)
+            for ip in sorted(online_peers):
+                # if ip != "127.0.0.1":
+                self.user_list.addItem(ip)
+
+
+
+
 
     def show_history(self):
         msg = load_history()
-        messagebox.showinfo("Chat History", msg or "No messages.")
+        QMessageBox.information(self, "Chat History", msg or "No messages.")
 
-    def open_chat(self):
-        sel = self.peer_list.curselection()
-        if not sel:
+    def check_notifications(self):
+        for ip, msgs in incoming_messages.items():
+            if msgs and ip != self.current_peer:
+                self.notification_label.setText(f"🔔 New message from {ip}")
+                return
+        self.notification_label.setText("")
+
+    def open_chat_window(self):
+        selected = self.user_list.currentItem()
+        if not selected:
             return
-        ip = self.peer_list.get(sel[0])
+        ip = selected.text()
         self.current_peer = ip
-        self.clear()
-        tk.Label(self.root, text=f"Chat with {ip}", font=("Arial", 12)).pack()
-        self.text_area = scrolledtext.ScrolledText(self.root, width=60, height=20)
-        self.text_area.pack()
-        self.text_area.insert(tk.END, load_history())
-        self.text_area.config(state=tk.DISABLED)
-        self.msg_entry = tk.Entry(self.root, width=50)
-        self.msg_entry.pack()
-        tk.Button(self.root, text="Send", command=self.send_msg).pack()
-        tk.Button(self.root, text="Send File", command=self.send_file).pack(pady=2)
-        tk.Button(self.root, text="Back", command=self.main_ui).pack()
-        self.check_new_msgs()
+        self.chat_window = ChatWindow(self, ip)
+        self.chat_window.show()
+
+
+class ChatWindow(QWidget):
+    def __init__(self, parent, peer_ip):
+        super().__init__()
+        self.parent = parent
+        self.peer_ip = peer_ip
+        self.setWindowTitle(f"Chat with {peer_ip}")
+        self.resize(600, 400)
+        self.init_ui()
+
+    def init_ui(self):
+        self.layout = QVBoxLayout()
+        self.chat_area = QTextEdit()
+        self.chat_area.setReadOnly(True)
+        self.msg_input = QLineEdit()
+        self.send_btn = QPushButton("Send")
+        self.file_btn = QPushButton("Send File")
+
+        self.send_btn.clicked.connect(self.send_msg)
+        self.file_btn.clicked.connect(self.send_file)
+
+        hbox = QHBoxLayout()
+        hbox.addWidget(self.msg_input)
+        hbox.addWidget(self.send_btn)
+
+        self.layout.addWidget(self.chat_area)
+        self.layout.addLayout(hbox)
+        self.layout.addWidget(self.file_btn)
+        self.setLayout(self.layout)
+
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_chat)
+        self.timer.start(1000)
+
+    def update_chat(self):
+        msgs = incoming_messages.get(self.peer_ip, [])
+        if msgs:
+            for msg in msgs:
+                self.chat_area.append(f"{self.peer_ip}: {msg}")
+            incoming_messages[self.peer_ip] = []
 
     def send_msg(self):
-        msg = self.msg_entry.get()
+        msg = self.msg_input.text()
         if not msg:
-            return
-        peer = self.current_peer
-        if peer not in connections:
-            messagebox.showerror("Error", "Not connected to peer")
             return
         content = msg.encode('utf-8')
         checksum = calculate_checksum(content)
         encrypted = onion_encrypt(content)
         header = f"TEXT::{checksum}:".encode('utf-8')
         try:
-            connections[peer].sendall(header + encrypted)
-            save_message(f"You -> {peer}: {msg}")
-            self.text_area.config(state=tk.NORMAL)
-            self.text_area.insert(tk.END, f"You: {msg}\n")
-            self.text_area.config(state=tk.DISABLED)
+            connections[self.peer_ip].sendall(header + encrypted)
+            save_message(f"You -> {self.peer_ip}: {msg}")
+            self.chat_area.append(f"You: {msg}")
         except:
-            messagebox.showerror("Error", "Failed to send message")
-        self.msg_entry.delete(0, tk.END)
+            QMessageBox.critical(self, "Error", "Failed to send message")
+        self.msg_input.clear()
 
     def send_file(self):
-        file_path = filedialog.askopenfilename()
-        if not file_path:
-            return
-        peer = self.current_peer
-        if peer not in connections:
-            messagebox.showerror("Error", "Not connected")
+        path, _ = QFileDialog.getOpenFileName(self, "Select File")
+        if not path:
             return
         try:
-            with open(file_path, 'rb') as f:
+            with open(path, 'rb') as f:
                 content = f.read()
+            filename = os.path.basename(path)
             checksum = calculate_checksum(content)
             encrypted = onion_encrypt(content)
-            filename = os.path.basename(file_path)
             header = f"FILE:{filename}:{checksum}:".encode('utf-8')
-            connections[peer].sendall(header + encrypted)
-            save_message(f"[You sent file: {filename}]")
-            self.text_area.config(state=tk.NORMAL)
-            self.text_area.insert(tk.END, f"[File sent: {filename}]\n")
-            self.text_area.config(state=tk.DISABLED)
+            connections[self.peer_ip].sendall(header + encrypted)
+            save_message(f"You sent file: {filename}")
+            self.chat_area.append(f"You sent file: {filename}")
         except:
-            messagebox.showerror("Error", "File sending failed")
+            QMessageBox.critical(self, "Error", "Failed to send file")
 
-    def check_new_msgs(self):
-        peer = self.current_peer
-        if peer in incoming_messages:
-            self.text_area.config(state=tk.NORMAL)
-            for msg in incoming_messages[peer]:
-                self.text_area.insert(tk.END, f"{peer}: {msg}\n")
-            incoming_messages[peer] = []
-            self.text_area.config(state=tk.DISABLED)
-        self.root.after(1000, self.check_new_msgs)
-
-    def clear(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
-            
-    def poll_incoming(self):
-        for ip, messages in incoming_messages.items():
-            if messages and ip != self.current_peer:
-                self.notification_label.config(text=f"🔔 New message from {ip}")
-                break
-        else:
-            self.notification_label.config(text="")
-        self.root.after(1000, self.poll_incoming)
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = ChatApp(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = MessengerGUI()
+    window.show()
+    sys.exit(app.exec_())

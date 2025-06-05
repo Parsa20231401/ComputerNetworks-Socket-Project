@@ -11,7 +11,7 @@ HISTORY_FILE = "history.txt"
 PEERS_FILE = "config.json"
 online_peers = set()
 lock = threading.Lock()
-
+message_callbacks = []
 current_chat_peer = None  # آدرس IP کاربری که با او در حال چت هستیم
 incoming_messages = {}    # پیام‌های دریافتی برای کاربران دیگر
 
@@ -62,15 +62,19 @@ def handle_client(conn, addr):
                 if recv_checksum != real_checksum:
                     print("⚠️ پیام آسیب دیده (checksum mismatch)")
                     continue
-
+                
                 if msg_type == "TEXT":
                     message = decrypted.decode('utf-8')
                     if ip == current_chat_peer:
                         print(f"\n💬 {ip} says: {message}")
                         save_message(f"{ip}: {message}")
+                        # Add this line to notify TUI
+                        for callback in message_callbacks:
+                            callback(ip, message)
                     else:
                         incoming_messages.setdefault(ip, []).append(message)
                         print(f"\n🔔 اعلان: پیام جدید از {ip}")
+
                 elif msg_type == "FILE":
                     os.makedirs("media", exist_ok=True)
                     path = os.path.join("media", filename)
@@ -246,6 +250,81 @@ def chat_with(peer_ip, peer_port):
             break
 
     current_chat_peer = None
+    
+    
+def register_message_callback(callback):
+    """Register a callback for received messages"""
+    message_callbacks.append(callback)
+
+
+
+
+
+
+
+
+
+
+
+# Add these to your existing p2p.py
+
+def start_network():
+    """Start the network components"""
+    server_thread_instance = threading.Thread(target=server_thread, daemon=True)
+    server_thread_instance.start()
+    print(f"Server started on port {PORT}")  # This won't show in TUI
+    
+    # Load and connect to peers
+    with open("config.json") as f:
+        peer_config = json.load(f)
+    peers = peer_config["peers"]
+    
+    for peer in peers:
+        if peer["port"] != PORT:
+            connect_to_peer(peer["ip"], peer["port"])
+
+def get_online_peers():
+    """Return list of online peers"""
+    with lock:
+        return list(online_peers)
+
+def send_chat_message(peer_ip, message):
+    """Send message to a peer"""
+    with lock:
+        conn = connections.get(peer_ip)
+    
+    if conn:
+        content = message.encode('utf-8')
+        checksum = calculate_checksum(content)
+        encrypted = onion_encrypt(content)
+        header = f"TEXT::{checksum}:".encode('utf-8')
+        conn.send(header + encrypted)
+    else:
+        print("No connection to peer")  # Should handle this in TUI
+
+# Modify handle_client to use callback
+def handle_message_received(sender, message):
+    """This will be called when a message is received"""
+    # This should be connected to the TUI display
+    pass  # Implementation depends on how you integrate with TUI
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def main():
     global PORT

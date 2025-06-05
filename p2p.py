@@ -32,6 +32,15 @@ def load_history():
             return f.read()
     return ""
 
+def recvall(sock, length):
+    data = b""
+    while len(data) < length:
+        part = sock.recv(length - len(data))
+        if not part:
+            break
+        data += part
+    return data
+
 def handle_client(conn, addr):
     ip = addr[0]
     with conn:
@@ -41,35 +50,29 @@ def handle_client(conn, addr):
 
         while True:
             try:
-                data = conn.recv(4096)
-                if not data:
+                raw_len = recvall(conn, 4)
+                if not raw_len:
                     break
-
-                parts = data.split(b':', 3)
-                if len(parts) < 4:
-                    continue
-
-                msg_type = parts[0].decode()
-                filename = parts[1].decode()
-                recv_checksum = parts[2].decode()
-                payload = parts[3]
+                header_len = int.from_bytes(raw_len, 'big')
+                header = json.loads(recvall(conn, header_len).decode())
+                payload = recvall(conn, header['length'])
 
                 decrypted = onion_decrypt(payload)
                 real_checksum = calculate_checksum(decrypted)
 
-                if recv_checksum != real_checksum:
+                if header['checksum'] != real_checksum:
                     continue
 
-                if msg_type == "TEXT":
+                if header['type'] == "TEXT":
                     message = decrypted.decode('utf-8')
                     save_message(f"{ip}: {message}")
                     incoming_messages.setdefault(ip, []).append(message)
-                elif msg_type == "FILE":
+                elif header['type'] == "FILE":
                     os.makedirs("media", exist_ok=True)
-                    path = os.path.join("media", filename)
+                    path = os.path.join("media", header['filename'])
                     with open(path, 'wb') as f:
                         f.write(decrypted)
-                    incoming_messages.setdefault(ip, []).append(f"[Received file: {filename}]")
+                    incoming_messages.setdefault(ip, []).append(f"[Received file: {header['filename']}]")
 
             except:
                 break
@@ -183,25 +186,20 @@ class MessengerGUI(QWidget):
 
     def refresh_users(self):
         self.user_list.clear()
-        # try:
-        #     with open(PEERS_FILE) as f:
-        #         config = json.load(f)
-        #     for peer in config["peers"]:
-        #         ip, port = peer["ip"], peer["port"]
-        #         if port == PORT:
-        #             continue
-        #         connect_to_peer(ip, port)
-        # except Exception as e:
-        #     QMessageBox.critical(self, "Error", f"Failed to read config: {e}")
+        try:
+            with open(PEERS_FILE) as f:
+                config = json.load(f)
+            for peer in config["peers"]:
+                ip, port = peer["ip"], peer["port"]
+                if port == PORT:
+                    continue
+                connect_to_peer(ip, port)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to read config: {e}")
 
         with lock:
             for ip in sorted(online_peers):
-                # if ip != "127.0.0.1":
                 self.user_list.addItem(ip)
-
-
-
-
 
     def show_history(self):
         msg = load_history()
@@ -261,8 +259,20 @@ class ChatWindow(QWidget):
         msgs = incoming_messages.get(self.peer_ip, [])
         if msgs:
             for msg in msgs:
-                self.chat_area.append(f"{self.peer_ip}: {msg}")
+                if msg.startswith("[Received file: ") and any(msg.endswith(ext + "]") for ext in [".jpg", ".png", ".jpeg"]):
+                    filename = msg.split("[Received file: ")[1][:-1]
+                    img_path = os.path.join("media", filename)
+                    if os.path.exists(img_path):
+                        self.chat_area.append(f"{self.peer_ip}: <img src='{img_path}' width='200'>")
+                    else:
+                        self.chat_area.append(f"{self.peer_ip}: [Image file missing: {filename}]")
+                elif msg.startswith("[Received file: ") and any(msg.endswith(ext + "]") for ext in [".mp4", ".avi", ".mov"]):
+                    filename = msg.split("[Received file: ")[1][:-1]
+                    self.chat_area.append(f"{self.peer_ip}: [Video received: {filename}] (open from media folder)")
+                else:
+                    self.chat_area.append(f"{self.peer_ip}: {msg}")
             incoming_messages[self.peer_ip] = []
+
 
     def send_msg(self):
         msg = self.msg_input.text()
@@ -271,9 +281,17 @@ class ChatWindow(QWidget):
         content = msg.encode('utf-8')
         checksum = calculate_checksum(content)
         encrypted = onion_encrypt(content)
-        header = f"TEXT::{checksum}:".encode('utf-8')
+        header = json.dumps({
+            "type": "TEXT",
+            "filename": "",
+            "checksum": checksum,
+            "length": len(encrypted)
+        }).encode()
         try:
-            connections[self.peer_ip].sendall(header + encrypted)
+            sock = connections[self.peer_ip]
+            sock.send(len(header).to_bytes(4, 'big'))
+            sock.send(header)
+            sock.send(encrypted)
             save_message(f"You -> {self.peer_ip}: {msg}")
             self.chat_area.append(f"You: {msg}")
         except:
@@ -290,8 +308,16 @@ class ChatWindow(QWidget):
             filename = os.path.basename(path)
             checksum = calculate_checksum(content)
             encrypted = onion_encrypt(content)
-            header = f"FILE:{filename}:{checksum}:".encode('utf-8')
-            connections[self.peer_ip].sendall(header + encrypted)
+            header = json.dumps({
+                "type": "FILE",
+                "filename": filename,
+                "checksum": checksum,
+                "length": len(encrypted)
+            }).encode()
+            sock = connections[self.peer_ip]
+            sock.send(len(header).to_bytes(4, 'big'))
+            sock.send(header)
+            sock.send(encrypted)
             save_message(f"You sent file: {filename}")
             self.chat_area.append(f"You sent file: {filename}")
         except:

@@ -102,11 +102,20 @@ def server_thread():
 
 def connect_to_peer(ip, port):
     try:
+        # اگر از قبل به این همتا متصل هستیم، از همان اتصال استفاده کنیم
+        with lock:
+            if ip in connections:
+                return connections[ip]
+        
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((ip, port))
+        
         with lock:
             connections[ip] = s
             online_peers.add(ip)
+        
+        # شروع یک thread جدید برای گوش دادن به پیام‌های این همتا
+        threading.Thread(target=listen_to_peer, args=(s, ip), daemon=True).start()
         return s
     except Exception as e:
         print(f"❌ Failed to connect to {ip}:{port} - {e}")
@@ -134,6 +143,53 @@ def choose_peer():
     except:
         print("❌ Invalid input")
         return None
+
+def listen_to_peer(sock, ip):
+    try:
+        while True:
+            data = sock.recv(4096)
+            if not data:
+                break
+                
+            # پردازش پیام دریافتی
+            parts = data.split(b':', 3)
+            if len(parts) < 4:
+                continue
+                
+            msg_type = parts[0].decode()
+            filename = parts[1].decode()
+            recv_checksum = parts[2].decode()
+            payload = parts[3]
+            
+            decrypted = onion_decrypt(payload)
+            real_checksum = calculate_checksum(decrypted)
+            
+            if recv_checksum != real_checksum:
+                print("⚠️ پیام آسیب دیده (checksum mismatch)")
+                continue
+                
+            if msg_type == "TEXT":
+                message = decrypted.decode('utf-8')
+                if ip == current_chat_peer:
+                    print(f"\n💬 {ip} says: {message}")
+                    save_message(f"{ip}: {message}")
+                else:
+                    incoming_messages.setdefault(ip, []).append(message)
+                    print(f"\n🔔 اعلان: پیام جدید از {ip}")
+            elif msg_type == "FILE":
+                os.makedirs("media", exist_ok=True)
+                path = os.path.join("media", filename)
+                with open(path, 'wb') as f:
+                    f.write(decrypted)
+                print(f"\n📁 فایل {filename} از {ip} دریافت شد.")
+                
+    except Exception as e:
+        print(f"Error in listening to {ip}: {e}")
+    finally:
+        with lock:
+            if ip in connections:
+                del connections[ip]
+            online_peers.discard(ip)
 
 def chat_with(peer_ip, peer_port):
     global current_chat_peer

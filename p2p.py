@@ -6,6 +6,7 @@ from datetime import datetime
 from utils import onion_encrypt, onion_decrypt, calculate_checksum
 
 
+connections = {}         # key: ip -> value: socket object
 
 PORT = 12345
 HISTORY_FILE = "history.txt"
@@ -26,6 +27,7 @@ def save_message(msg):
     with open(HISTORY_FILE, 'a') as f:
         f.write(f"{datetime.now()} - {msg}\n")
 
+
 def show_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'r') as f:
@@ -33,6 +35,7 @@ def show_history():
             print(f.read())
     else:
         print("No chat history yet.")
+        
 
 
 def handle_client(conn, addr):
@@ -101,15 +104,28 @@ def server_thread():
         conn, addr = server.accept()
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
-def connect_to_peer(ip):
+def connect_to_peer(ip, port):
+    # try:
+    #     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    #     s.connect((ip, PORT))
+    #     threading.Thread(target=listen_to_peer, args=(s, ip), daemon=True).start()
+    #     return s
+    # except Exception as e:
+    #     print(f"❌ Failed to connect to {ip}: {e}")
+    #     return None
+    
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((ip, PORT))
-        threading.Thread(target=listen_to_peer, args=(s, ip), daemon=True).start()
+        s.connect((ip, port))
+        connections[ip] = s
+        lock.acquire()
+        online_peers.add(ip)
+        lock.release()
         return s
-    except Exception as e:
-        print(f"❌ Failed to connect to {ip}: {e}")
+    except:
         return None
+    
+    
 
 def listen_to_peer(sock, ip):
     try:
@@ -126,10 +142,6 @@ def listen_to_peer(sock, ip):
         lock.acquire()
         online_peers.discard(ip)
         lock.release()
-
-
-
-
 
 def choose_peer():
     lock.acquire()
@@ -153,31 +165,31 @@ def choose_peer():
         return None
 
 
-def chat_with(peer_ip):
+def chat_with(peer_ip, peer_port):
     global current_chat_peer
     current_chat_peer = peer_ip
-    conn = connect_to_peer(peer_ip)
+    conn = connect_to_peer(peer_ip, peer_port)
     if not conn:
-        print("❌ اتصال برقرار نشد.")
+        print("❌ Connection failed.")
         return
 
-    print(f"💬 چت با {peer_ip}. برای ارسال فایل: /sendfile filepath")
-    
-    # نمایش پیام‌های ذخیره‌شده
+    print(f"💬 Chatting with {peer_ip}:{peer_port}. Type /sendfile filepath to send a file.")
+
+    # Show unread messages if any
     if peer_ip in incoming_messages:
-        print("📥 پیام‌های قبلی:")
+        print("📥 Unread messages:")
         for msg in incoming_messages[peer_ip]:
             print(f"{peer_ip}: {msg}")
         del incoming_messages[peer_ip]
 
     while True:
-        msg = input("📤 پیام شما: ")
+        msg = input("You: ")
         if msg == "/exit":
             break
         elif msg.startswith("/sendfile "):
             filepath = msg.split(" ", 1)[1]
             if not os.path.exists(filepath):
-                print("❌ فایل یافت نشد.")
+                print("❌ File not found.")
                 continue
             with open(filepath, 'rb') as f:
                 content = f.read()
@@ -198,44 +210,75 @@ def chat_with(peer_ip):
 
 
 
+def accept_connections(server_socket):
+    while True:
+        client_socket, addr = server_socket.accept()
+        ip = addr[0]
+        print(f"📥 Incoming connection from {ip}")
+        connections[ip] = client_socket
+        with lock:
+            online_peers.add(ip)
+        threading.Thread(target=handle_client, args=(client_socket, ip), daemon=True).start()
+
 
 
 def main():
-    threading.Thread(target=server_thread, daemon=True).start()
-    show_history()
+    # global PORT
 
-    peers = load_peers()
-    connections = []
-    for ip in peers:
-        conn = connect_to_peer(ip)
-        if conn:
-            connections.append(conn)
-            lock.acquire()
-            online_peers.add(ip)
-            lock.release()
+    username = input("Enter your username: ")
+    PORT = int(input("Enter your listening port (e.g., 12345): "))
 
-    name = input("Enter your name: ")
+    # Start TCP server to accept incoming connections
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(('0.0.0.0', PORT))
+    server.listen()
+    print(f"🔌 Listening on port {PORT}...")
 
+    threading.Thread(target=accept_connections, args=(server,), daemon=True).start()
+
+    # Load peer list from config
+    with open("config.json") as f:
+        peer_config = json.load(f)
+
+    peers = peer_config["peers"]
+
+    # Connect to all other peers in the list (excluding self)
+    for peer in peers:
+        ip = peer["ip"]
+        port = peer["port"]
+        if port == PORT:
+            continue  # Skip self
+        threading.Thread(target=connect_to_peer, args=(ip, port), daemon=True).start()
+
+    # Main menu
     while True:
-        print("\n📝 instructions:")
-        print("  /online")
-        print("  /chat")
-        print("  /exit")
-        cmd = input(">> ")
+        print("\n===== MENU =====")
+        print("1. Show online users")
+        print("2. Start chat")
+        print("3. Show chat history")
+        print("4. Exit")
 
-        if cmd == "/online":
-            print("🟢 online users")
-            for peer in online_peers:
-                print(f" - {peer}")
-        elif cmd == "/chat":
-            selected = choose_peer()
-            if selected:
-                chat_with(selected)
-        elif cmd == "/exit":
+        choice = input("Select an option: ")
+
+        if choice == "1":
+            print("\nOnline users:")
+            for ip in online_peers:
+                print(f"- {ip}")
+        elif choice == "2":
+            print("Select a user to chat with:")
+            indexed_peers = [peer for peer in peers if peer["port"] != PORT]
+            for i, peer in enumerate(indexed_peers):
+                print(f"{i + 1}. {peer['ip']}:{peer['port']}")
+            idx = int(input("Enter number: ")) - 1
+            selected_peer = indexed_peers[idx]
+            chat_with(selected_peer["ip"], selected_peer["port"])
+        elif choice == "3":
+            show_history()
+        elif choice == "4":
+            print("Goodbye!")
             break
-
-
-
+        else:
+            print("Invalid option.")
 
 if __name__ == "__main__":
     main()

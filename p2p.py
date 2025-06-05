@@ -4,6 +4,8 @@ import json
 import os
 from datetime import datetime
 from utils import onion_encrypt, onion_decrypt, calculate_checksum
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Input, Button, RichLog
 
 connections = {}         # key: ip -> value: socket object
 PORT = 12345
@@ -247,7 +249,7 @@ def chat_with(peer_ip, peer_port):
 
     current_chat_peer = None
 
-def main():
+def P2PBackend():
     global PORT
 
     username = input("Enter your username: ")
@@ -342,5 +344,31 @@ def main():
         else:
             print("❌ Invalid option. Please choose 1-4")
 
+class ChatApp(App):
+    BINDINGS = [("ctrl+q", "quit", "Quit")]
+    
+    def __init__(self, p2p_backend):
+        super().__init__()
+        self.backend = p2p_backend
+    
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield RichLog(id="chatlog")
+        yield Input(placeholder="Message...")
+    
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+        # Start backend in thread
+        threading.Thread(target=self.backend.start, daemon=True).start()
+    
+    async def on_input_submitted(self, event):
+        log = self.query_one("#chatlog")
+        log.write(f"You: {event.value}")
+        self.backend.send_message(event.value)
+        self.query_one(Input).value = ""
+
+
 if __name__ == "__main__":
-    main()
+    backend = P2PBackend()  # Your existing code
+    app = ChatApp(backend)
+    app.run()

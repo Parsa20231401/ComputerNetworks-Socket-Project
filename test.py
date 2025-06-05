@@ -253,55 +253,75 @@ def main():
     username = input("Enter your username: ")
     PORT = int(input("Enter your listening port (e.g., 12345): "))
 
-    # Start TCP server
-    threading.Thread(target=server_thread, daemon=True).start()
+    # Start TCP server thread
+    server_thread_instance = threading.Thread(target=server_thread, daemon=True)
+    server_thread_instance.start()
+    print(f"✅ Server started on port {PORT}")
 
     # Load peer list from config
     try:
         with open("config.json") as f:
             peer_config = json.load(f)
         peers = peer_config["peers"]
+        print("✅ Loaded peer configuration")
     except Exception as e:
-        print(f"Error loading config: {e}")
+        print(f"❌ Error loading config: {e}")
         return
 
-    # Connect to all other peers in the list (excluding self)
+    # Connect to all other peers (excluding self)
+    print("\n🔗 Connecting to peers...")
     for peer in peers:
         ip = peer["ip"]
         port = peer["port"]
-        if port == PORT:
-            continue  # Skip self
-        threading.Thread(target=connect_to_peer, args=(ip, port), daemon=True).start()
+        
+        if port == PORT:  # Skip self
+            continue
+            
+        print(f"Attempting to connect to {ip}:{port}...")
+        if connect_to_peer(ip, port):
+            print(f"✅ Successfully connected to {ip}:{port}")
+        else:
+            print(f"❌ Failed to connect to {ip}:{port}")
 
     # Main menu
     while True:
-        print("\n===== MENU =====")
+        print("\n===== MAIN MENU =====")
         print("1. Show online users")
         print("2. Start chat")
         print("3. Show chat history")
         print("4. Exit")
 
-        choice = input("Select an option: ")
+        choice = input("Select an option (1-4): ")
 
         if choice == "1":
             with lock:
                 online_list = list(online_peers)
-            print("\nOnline users:")
-            for ip in online_list:
-                print(f"- {ip}")
+            
+            if not online_list:
+                print("\nNo online users available")
+            else:
+                print("\nOnline users:")
+                for i, ip in enumerate(online_list):
+                    print(f"{i+1}. {ip}")
+                
         elif choice == "2":
             with lock:
                 online_list = list(online_peers)
-            if not online_list:
-                print("❌ No online users available")
-                continue
             
-            print("Select a user to chat with:")
+            if not online_list:
+                print("\nNo online users available to chat with")
+                continue
+                
+            print("\nSelect a user to chat with:")
             for i, ip in enumerate(online_list):
-                print(f"{i + 1}. {ip}")
+                print(f"{i+1}. {ip}")
             
             try:
-                idx = int(input("Enter number: ")) - 1
+                selection = input("Enter user number (or 'cancel' to go back): ")
+                if selection.lower() == 'cancel':
+                    continue
+                    
+                idx = int(selection) - 1
                 if 0 <= idx < len(online_list):
                     selected_ip = online_list[idx]
                     # Find the port for this IP
@@ -309,15 +329,18 @@ def main():
                     chat_with(selected_ip, selected_port)
                 else:
                     print("❌ Invalid selection")
-            except:
-                print("❌ Invalid input")
+            except ValueError:
+                print("❌ Please enter a valid number")
+                
         elif choice == "3":
             show_history()
+            
         elif choice == "4":
-            print("Goodbye!")
+            print("\nGoodbye!")
             break
+            
         else:
-            print("Invalid option.")
+            print("❌ Invalid option. Please choose 1-4")
 
 if __name__ == "__main__":
     main()

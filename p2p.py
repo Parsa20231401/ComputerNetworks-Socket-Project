@@ -5,9 +5,7 @@ import os
 from datetime import datetime
 from utils import onion_encrypt, onion_decrypt, calculate_checksum
 
-
 connections = {}         # key: ip -> value: socket object
-
 PORT = 12345
 HISTORY_FILE = "history.txt"
 PEERS_FILE = "config.json"
@@ -24,25 +22,23 @@ def load_peers():
     return []
 
 def save_message(msg):
-    with open(HISTORY_FILE, 'a') as f:
+    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
         f.write(f"{datetime.now()} - {msg}\n")
-
 
 def show_history():
     if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, 'r') as f:
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
             print("📜 Chat History:")
             print(f.read())
     else:
         print("No chat history yet.")
-        
-
 
 def handle_client(conn, addr):
+    ip = addr[0]
     with conn:
-        lock.acquire()
-        online_peers.add(addr[0])
-        lock.release()
+        with lock:
+            online_peers.add(ip)
+            connections[ip] = conn
 
         while True:
             try:
@@ -50,8 +46,9 @@ def handle_client(conn, addr):
                 if not data:
                     break
 
-                parts = data.split(b':', 3)
+                parts = data.split(b':', 3)  # Split into max 4 parts
                 if len(parts) < 4:
+                    print("⚠️ Invalid message format - not enough parts")
                     continue
 
                 msg_type = parts[0].decode()
@@ -67,218 +64,283 @@ def handle_client(conn, addr):
                     continue
 
                 if msg_type == "TEXT":
-                    message = decrypted.decode()
-                    if addr[0] == current_chat_peer:
-                        print(f"\n💬 {addr[0]} says: {message}")
-                        save_message(f"{addr[0]}: {message}")
+                    message = decrypted.decode('utf-8')
+                    if ip == current_chat_peer:
+                        print(f"\n💬 {ip} says: {message}")
+                        save_message(f"{ip}: {message}")
                     else:
-                        # ذخیره پیام برای بعد
-                        incoming_messages.setdefault(addr[0], []).append(message)
-                        print(f"\n🔔 اعلان: پیام جدید از {addr[0]}")
+                        incoming_messages.setdefault(ip, []).append(message)
+                        print(f"\n🔔 اعلان: پیام جدید از {ip}")
                 elif msg_type == "FILE":
                     os.makedirs("media", exist_ok=True)
                     path = os.path.join("media", filename)
                     with open(path, 'wb') as f:
                         f.write(decrypted)
-                    print(f"\n📁 فایل {filename} از {addr[0]} دریافت شد.")
+                    print(f"\n📁 فایل {filename} از {ip} دریافت شد.")
 
             except Exception as e:
-                print(f"خطا در دریافت: {e}")
+                print(f"خطا در دریافت از {ip}: {e}")
                 break
 
-        lock.acquire()
-        online_peers.discard(addr[0])
-        lock.release()
-
-            
-        
-        
-        
+    with lock:
+        online_peers.discard(ip)
+        connections.pop(ip, None)
 
 def server_thread():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(('0.0.0.0', PORT))
     server.listen(5)
     print(f"🔌 Listening on port {PORT}...")
     while True:
-        conn, addr = server.accept()
-        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+        try:
+            conn, addr = server.accept()
+            threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+        except Exception as e:
+            print(f"Server error: {e}")
+            break
 
 def connect_to_peer(ip, port):
-    # try:
-    #     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #     s.connect((ip, PORT))
-    #     threading.Thread(target=listen_to_peer, args=(s, ip), daemon=True).start()
-    #     return s
-    # except Exception as e:
-    #     print(f"❌ Failed to connect to {ip}: {e}")
-    #     return None
-    
     try:
+        # اگر از قبل به این همتا متصل هستیم، از همان اتصال استفاده کنیم
+        with lock:
+            if ip in connections:
+                return connections[ip]
+        
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((ip, port))
-        connections[ip] = s
-        lock.acquire()
-        online_peers.add(ip)
-        lock.release()
+        
+        with lock:
+            connections[ip] = s
+            online_peers.add(ip)
+        
+        # شروع یک thread جدید برای گوش دادن به پیام‌های این همتا
+        threading.Thread(target=listen_to_peer, args=(s, ip), daemon=True).start()
         return s
-    except:
+    except Exception as e:
+        print(f"❌ Failed to connect to {ip}:{port} - {e}")
         return None
-    
-    
+
+def choose_peer():
+    with lock:
+        peers = list(online_peers)
+
+    if not peers:
+        print("❌ No online users available to chat")
+        return None
+
+    print("👥 Online users: ")
+    for i, peer in enumerate(peers):
+        print(f"[{i}] {peer}")
+
+    try:
+        choice = input("Enter the number of user to chat: ")
+        idx = int(choice)
+        if 0 <= idx < len(peers):
+            return peers[idx]
+        print("❌ Invalid selection")
+        return None
+    except:
+        print("❌ Invalid input")
+        return None
 
 def listen_to_peer(sock, ip):
     try:
         while True:
-            data = sock.recv(1024)
+            data = sock.recv(4096)
             if not data:
                 break
-            msg = data.decode()
-            print(f"\n{ip} says: {msg}")
-            save_message(f"{ip}: {msg}")
-    except:
-        pass
+                
+            # پردازش پیام دریافتی
+            parts = data.split(b':', 3)
+            if len(parts) < 4:
+                continue
+                
+            msg_type = parts[0].decode()
+            filename = parts[1].decode()
+            recv_checksum = parts[2].decode()
+            payload = parts[3]
+            
+            decrypted = onion_decrypt(payload)
+            real_checksum = calculate_checksum(decrypted)
+            
+            if recv_checksum != real_checksum:
+                print("⚠️ پیام آسیب دیده (checksum mismatch)")
+                continue
+                
+            if msg_type == "TEXT":
+                message = decrypted.decode('utf-8')
+                if ip == current_chat_peer:
+                    print(f"\n💬 {ip} says: {message}")
+                    save_message(f"{ip}: {message}")
+                else:
+                    incoming_messages.setdefault(ip, []).append(message)
+                    print(f"\n🔔 اعلان: پیام جدید از {ip}")
+            elif msg_type == "FILE":
+                os.makedirs("media", exist_ok=True)
+                path = os.path.join("media", filename)
+                with open(path, 'wb') as f:
+                    f.write(decrypted)
+                print(f"\n📁 فایل {filename} از {ip} دریافت شد.")
+                
+    except Exception as e:
+        print(f"Error in listening to {ip}: {e}")
     finally:
-        lock.acquire()
-        online_peers.discard(ip)
-        lock.release()
-
-def choose_peer():
-    lock.acquire()
-    peers = list(online_peers)
-    lock.release()
-
-    if not peers:
-        print("❌ there is no online user to chat")
-        return None
-
-    print("👥 online users: ")
-    for i, peer in enumerate(peers):
-        print(f"[{i}] {peer}")
-
-    choice = input("enter the number of user to chat:")
-    try:
-        idx = int(choice)
-        return peers[idx]
-    except:
-        print("❌ invalid choose ")
-        return None
-
+        with lock:
+            if ip in connections:
+                del connections[ip]
+            online_peers.discard(ip)
 
 def chat_with(peer_ip, peer_port):
     global current_chat_peer
     current_chat_peer = peer_ip
-    conn = connect_to_peer(peer_ip, peer_port)
+    
+    
+    # Check if we already have a connection
+    with lock:
+        conn = connections.get(peer_ip)
+    
     if not conn:
-        print("❌ Connection failed.")
-        return
+        conn = connect_to_peer(peer_ip, peer_port)
+        if not conn:
+            print("❌ Connection failed.")
+            current_chat_peer = None
+            return
 
-    print(f"💬 Chatting with {peer_ip}:{peer_port}. Type /sendfile filepath to send a file.")
+    print(f"💬 Chatting with {peer_ip}:{peer_port}. Type /sendfile filepath to send a file or /exit to quit.")
 
     # Show unread messages if any
     if peer_ip in incoming_messages:
-        print("📥 Unread messages:")
+        print("\n📥 Unread messages:")
         for msg in incoming_messages[peer_ip]:
             print(f"{peer_ip}: {msg}")
         del incoming_messages[peer_ip]
 
     while True:
-        msg = input("You: ")
-        if msg == "/exit":
-            break
-        elif msg.startswith("/sendfile "):
-            filepath = msg.split(" ", 1)[1]
-            if not os.path.exists(filepath):
-                print("❌ File not found.")
-                continue
-            with open(filepath, 'rb') as f:
-                content = f.read()
+        try:
+            msg = input("You: ")
+            if msg == "/exit":
+                break
+            elif msg.startswith("/sendfile "):
+                filepath = msg.split(" ", 1)[1]
+                if not os.path.exists(filepath):
+                    print("❌ File not found.")
+                    continue
+                with open(filepath, 'rb') as f:
+                    content = f.read()
 
-            checksum = calculate_checksum(content)
-            encrypted = onion_encrypt(content)
-            header = f"FILE:{os.path.basename(filepath)}:{checksum}:".encode()
-            conn.send(header + encrypted)
-        else:
-            content = msg.encode()
-            checksum = calculate_checksum(content)
-            encrypted = onion_encrypt(content)
-            header = f"TEXT::{checksum}:".encode()
-            conn.send(header + encrypted)
+                checksum = calculate_checksum(content)
+                encrypted = onion_encrypt(content)
+                header = f"FILE:{os.path.basename(filepath)}:{checksum}:".encode('utf-8')
+                conn.send(header + encrypted)
+                print(f"📤 Sent file: {os.path.basename(filepath)}")
+            else:    
+                content = msg.encode('utf-8')
+                checksum = calculate_checksum(content)
+                encrypted = onion_encrypt(content)
+                header = f"TEXT::{checksum}:".encode('utf-8')
+                conn.send(header + encrypted)
+            # print(f"Sent message format: {header + encrypted}") ############
+        except Exception as e:
+            print(f"Error sending message: {e}")
+            break
 
     current_chat_peer = None
-    conn.close()
-
-
-
-def accept_connections(server_socket):
-    while True:
-        client_socket, addr = server_socket.accept()
-        ip = addr[0]
-        print(f"📥 Incoming connection from {ip}")
-        connections[ip] = client_socket
-        with lock:
-            online_peers.add(ip)
-        threading.Thread(target=handle_client, args=(client_socket, ip), daemon=True).start()
-
-
 
 def main():
-    # global PORT
+    global PORT
 
     username = input("Enter your username: ")
     PORT = int(input("Enter your listening port (e.g., 12345): "))
 
-    # Start TCP server to accept incoming connections
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(('0.0.0.0', PORT))
-    server.listen()
-    print(f"🔌 Listening on port {PORT}...")
-
-    threading.Thread(target=accept_connections, args=(server,), daemon=True).start()
+    # Start TCP server thread
+    server_thread_instance = threading.Thread(target=server_thread, daemon=True)
+    server_thread_instance.start()
+    print(f"✅ Server started on port {PORT}")
 
     # Load peer list from config
-    with open("config.json") as f:
-        peer_config = json.load(f)
+    try:
+        with open("config.json") as f:
+            peer_config = json.load(f)
+        peers = peer_config["peers"]
+        print("✅ Loaded peer configuration")
+    except Exception as e:
+        print(f"❌ Error loading config: {e}")
+        return
 
-    peers = peer_config["peers"]
-
-    # Connect to all other peers in the list (excluding self)
+    # Connect to all other peers (excluding self)
+    print("\n🔗 Connecting to peers...")
     for peer in peers:
         ip = peer["ip"]
         port = peer["port"]
-        if port == PORT:
-            continue  # Skip self
-        threading.Thread(target=connect_to_peer, args=(ip, port), daemon=True).start()
+        
+        if port == PORT:  # Skip self
+            continue
+            
+        print(f"Attempting to connect to {ip}:{port}...")
+        if connect_to_peer(ip, port):
+            print(f"✅ Successfully connected to {ip}:{port}")
+        else:
+            print(f"❌ Failed to connect to {ip}:{port}")
 
     # Main menu
     while True:
-        print("\n===== MENU =====")
+        print("\n===== MAIN MENU =====")
         print("1. Show online users")
         print("2. Start chat")
         print("3. Show chat history")
         print("4. Exit")
 
-        choice = input("Select an option: ")
+        choice = input("Select an option (1-4): ")
 
         if choice == "1":
-            print("\nOnline users:")
-            for ip in online_peers:
-                print(f"- {ip}")
+            with lock:
+                online_list = list(online_peers)
+            
+            if not online_list:
+                print("\nNo online users available")
+            else:
+                print("\nOnline users:")
+                for i, ip in enumerate(online_list):
+                    print(f"{i+1}. {ip}")
+                
         elif choice == "2":
-            print("Select a user to chat with:")
-            indexed_peers = [peer for peer in peers if peer["port"] != PORT]
-            for i, peer in enumerate(indexed_peers):
-                print(f"{i + 1}. {peer['ip']}:{peer['port']}")
-            idx = int(input("Enter number: ")) - 1
-            selected_peer = indexed_peers[idx]
-            chat_with(selected_peer["ip"], selected_peer["port"])
+            with lock:
+                online_list = list(online_peers)
+            
+            if not online_list:
+                print("\nNo online users available to chat with")
+                continue
+                
+            print("\nSelect a user to chat with:")
+            for i, ip in enumerate(online_list):
+                print(f"{i+1}. {ip}")
+            
+            try:
+                selection = input("Enter user number (or 'cancel' to go back): ")
+                if selection.lower() == 'cancel':
+                    continue
+                    
+                idx = int(selection) - 1
+                if 0 <= idx < len(online_list):
+                    selected_ip = online_list[idx]
+                    # Find the port for this IP
+                    selected_port = next((p["port"] for p in peers if p["ip"] == selected_ip), PORT)
+                    chat_with(selected_ip, selected_port)
+                else:
+                    print("❌ Invalid selection")
+            except ValueError:
+                print("❌ Please enter a valid number")
+                
         elif choice == "3":
             show_history()
+            
         elif choice == "4":
-            print("Goodbye!")
+            print("\nGoodbye!")
             break
+            
         else:
-            print("Invalid option.")
+            print("❌ Invalid option. Please choose 1-4")
 
 if __name__ == "__main__":
     main()

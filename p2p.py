@@ -267,7 +267,7 @@ class MessengerGUI(QWidget):
 
     def check_notifications(self):
         for ip, msgs in incoming_messages.items():
-            if msgs and ip != self.current_peer:
+            if msgs != self.current_peer:
                 self.notification_label.setText(f"🔔 New message from {ip}")
                 return
         self.notification_label.setText("")

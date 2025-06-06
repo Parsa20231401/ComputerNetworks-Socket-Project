@@ -14,6 +14,20 @@ from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtCore import QUrl
 from utils import onion_encrypt, onion_decrypt, calculate_checksum
+import logging
+
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_filename = os.path.join(log_dir, f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.report")
+
+logging.basicConfig(
+    filename=log_filename,
+    filemode='w',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+logging.info("P2P Messenger started.")
 
 connections = {}
 online_peers = set()
@@ -71,6 +85,8 @@ def handle_client(conn, addr):
                     message = decrypted.decode('utf-8')
                     save_message(f"{ip}: {message}")
                     incoming_messages.setdefault(ip, []).append(message)
+                    logging.info(f"Received message from {ip}: {message}")
+
                 elif header['type'] == "FILE":
                     os.makedirs("media", exist_ok=True)
                     path = os.path.join("media", header['filename'])
@@ -103,11 +119,13 @@ def connect_to_peer(ip, port):
             return connections[ip]
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        logging.info(f"Trying to connect to peer: {ip}:{port}")
         s.connect((ip, port))
         with lock:
             connections[ip] = s
             online_peers.add(ip)
         threading.Thread(target=handle_client, args=(s, (ip, port)), daemon=True).start()
+        logging.info(f"Connected to peer: {ip}:{port}")
         return s
     except:
         return None
@@ -120,6 +138,8 @@ def broadcast_peers():
             ip, port = peer["ip"], peer["port"]
             if port != PORT:
                 connect_to_peer(ip, port)
+                logging.info("Broadcasting to peers from config file.")
+
     except:
         pass
 
@@ -343,7 +363,10 @@ class ChatWindow(QWidget):
 
 
     def send_msg(self):
+        
+
         msg = self.msg_input.text()
+        logging.info(f"Sending message to {self.peer_ip}: {msg}")
         if not msg:
             return
         content = msg.encode('utf-8')
@@ -367,6 +390,8 @@ class ChatWindow(QWidget):
         self.msg_input.clear()
 
     def send_file(self):
+        logging.info(f"Sending file '{filename}' to {self.peer_ip}")
+
         path, _ = QFileDialog.getOpenFileName(self, "Select File")
         if not path:
             return

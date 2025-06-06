@@ -1,0 +1,6 @@
+2025-06-06 18:22:25,355 - INFO - P2P Messenger started.
+2025-06-06 18:22:43,640 - INFO - Trying to connect to peer: 127.0.0.1:12345
+2025-06-06 18:22:43,640 - INFO - Connected to peer: 127.0.0.1:12345
+2025-06-06 18:22:43,640 - INFO - Broadcasting to peers from config file.
+2025-06-06 18:22:43,640 - INFO - Broadcasting to peers from config file.
+2025-06-06 18:22:53,281 - INFO - Received message from 127.0.0.1: egergergh

@@ -2,3 +2,6 @@
 history.txt
 history.txt
 /media
+logs/log_20250609_105723.report
+*.report
+*.txt
